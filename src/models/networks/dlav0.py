@@ -439,38 +439,57 @@ def fill_up_weights(up):
 
 class IDAUp(nn.Module):
     def __init__(self, node_kernel, out_dim, channels, up_factors):
+        """
+        Args:
+          * ``node_kernel``
+          * ``out_dim``
+          * ``channels``
+          * ``up_factors``
+        """
         super(IDAUp, self).__init__()
         self.channels = channels
         self.out_dim = out_dim
-        for i, c in enumerate(channels):
-            if c == out_dim:
+        
+        # 设置proj和up层
+        for i, (channel,factor) in enumerate(zip(channels, up_factors)):
+            if channel == out_dim:
                 proj = Identity()
             else:
                 proj = nn.Sequential(
-                    nn.Conv2d(c, out_dim,
-                              kernel_size=1, stride=1, bias=False),
+                    nn.Conv2d(channel, out_dim,
+                              kernel_size=1, 
+                              stride=1, 
+                              bias=False),
                     BatchNorm(out_dim),
                     nn.ReLU(inplace=True))
-            f = int(up_factors[i])
-            if f == 1:
+            
+            if factor == 1:
                 up = Identity()
             else:
-                up = nn.ConvTranspose2d(
-                    out_dim, out_dim, f * 2, stride=f, padding=f // 2,
-                    output_padding=0, groups=out_dim, bias=False)
+                up = nn.ConvTranspose2d(out_dim, out_dim, 
+                                        kernel_size=factor * 2, 
+                                        stride=factor, 
+                                        padding=factor // 2,
+                                        output_padding=0, 
+                                        groups=out_dim, 
+                                        bias=False)
                 fill_up_weights(up)
-            setattr(self, 'proj_' + str(i), proj)
-            setattr(self, 'up_' + str(i), up)
+            setattr(self, f'proj_{i}', proj)
+            setattr(self, f'up_{i}', up)
 
+        # 设置node
         for i in range(1, len(channels)):
             node = nn.Sequential(
                 nn.Conv2d(out_dim * 2, out_dim,
-                          kernel_size=node_kernel, stride=1,
-                          padding=node_kernel // 2, bias=False),
+                          kernel_size=node_kernel, 
+                          stride=1,
+                          padding=node_kernel // 2, 
+                          bias=False),
                 BatchNorm(out_dim),
                 nn.ReLU(inplace=True))
-            setattr(self, 'node_' + str(i), node)
+            setattr(self, f'node_{i}', node)
 
+        # 初始化参数值？
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
@@ -484,13 +503,13 @@ class IDAUp(nn.Module):
             '{} vs {} layers'.format(len(self.channels), len(layers))
         layers = list(layers)
         for i, l in enumerate(layers):
-            upsample = getattr(self, 'up_' + str(i))
-            project = getattr(self, 'proj_' + str(i))
+            upsample = getattr(self, f'up_{i}')
+            project = getattr(self, f'proj_{i}')
             layers[i] = upsample(project(l))
         x = layers[0]
         y = []
         for i in range(1, len(layers)):
-            node = getattr(self, 'node_' + str(i))
+            node = getattr(self, f'node_{i}')
             x = node(torch.cat([x, layers[i]], 1))
             y.append(x)
         return x, y
@@ -531,10 +550,23 @@ def fill_fc_weights(layers):
                 nn.init.constant_(m.bias, 0)
 
 class DLASeg(nn.Module):
-    def __init__(self, base_name, heads,
-                 pretrained=True, down_ratio=4, head_conv=256):
+    """
+    this is class
+    """
+    def __init__(self, base_name, heads, pretrained, down_ratio, head_conv):
+        """
+        
+        Args:
+          * ``base_name``: 
+          * ``heads: dict``: {'hm': num_clas, 'wh': num of reg, 'id': feature dim for reid, 'reg'(optional): 2}
+          * ``pretrained: bool``
+          * ``down_ratio: int``: output stride. Currently only supports 4.
+          * ``head_conv: int``: conv layer channels for output head. 0 for no conv layer, -1 for default setting: 256 for resnets and dla.
+        """
         super(DLASeg, self).__init__()
         assert down_ratio in [2, 4, 8, 16]
+        
+        # initialise
         self.heads = heads
         self.first_level = int(np.log2(down_ratio))
         self.base = globals()[base_name](
@@ -553,12 +585,18 @@ class DLASeg(nn.Module):
             classes = self.heads[head]
             if head_conv > 0:
                 fc = nn.Sequential(
-                  nn.Conv2d(channels[self.first_level], head_conv,
-                    kernel_size=3, padding=1, bias=True),
+                  nn.Conv2d(channels[self.first_level], 
+                            head_conv,
+                            kernel_size=3, 
+                            padding=1, 
+                            bias=True),
                   nn.ReLU(inplace=True),
-                  nn.Conv2d(head_conv, classes, 
-                    kernel_size=1, stride=1, 
-                    padding=0, bias=True))
+                  nn.Conv2d(head_conv, 
+                            classes, 
+                            kernel_size=1, 
+                            stride=1, 
+                            padding=0, 
+                            bias=True))
                 if 'hm' in head:
                     fc[-1].bias.data.fill_(-2.19)
                 else:
@@ -607,37 +645,6 @@ class DLASeg(nn.Module):
             ret[head] = self.__getattr__(head)(x)
         return [ret]
 
-    '''
-    def optim_parameters(self, memo=None):
-        for param in self.base.parameters():
-            yield param
-        for param in self.dla_up.parameters():
-            yield param
-        for param in self.fc.parameters():
-            yield param
-    '''
-'''
-def dla34up(classes, pretrained_base=None, **kwargs):
-    model = DLASeg('dla34', classes, pretrained_base=pretrained_base, **kwargs)
-    return model
-
-
-def dla60up(classes, pretrained_base=None, **kwargs):
-    model = DLASeg('dla60', classes, pretrained_base=pretrained_base, **kwargs)
-    return model
-
-
-def dla102up(classes, pretrained_base=None, **kwargs):
-    model = DLASeg('dla102', classes,
-                   pretrained_base=pretrained_base, **kwargs)
-    return model
-
-
-def dla169up(classes, pretrained_base=None, **kwargs):
-    model = DLASeg('dla169', classes,
-                   pretrained_base=pretrained_base, **kwargs)
-    return model
-'''
 
 def get_pose_net(num_layers, heads, head_conv=256, down_ratio=4):
   model = DLASeg('dla{}'.format(num_layers), heads,

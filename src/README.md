@@ -1,4 +1,5 @@
 ### 文件结构
+```
 .
 ├── README.md
 ├── _init_paths.py
@@ -85,5 +86,4 @@
     ├── image.py
     ├── post_process.py
     └── utils.py
-
-11 directories, 74 files
+```
